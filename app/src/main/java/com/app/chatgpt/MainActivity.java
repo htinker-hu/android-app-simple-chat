@@ -23,6 +23,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -41,7 +42,10 @@ public class MainActivity extends AppCompatActivity {
     MessageAdapter messageAdapter;
 
     public static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    OkHttpClient client = new OkHttpClient();
+    OkHttpClient client = new OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .build();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -119,31 +123,58 @@ public class MainActivity extends AppCompatActivity {
         addToChat(response, Message.SEND_BY_BOT);
     } // addResponse End Here =======
 
-    void callAPI(String question){
-        // okhttp
-        messageList.add(new Message("Typing...", Message.SEND_BY_BOT));
-
-        JSONObject jsonBody = new JSONObject();
-        try {
-            jsonBody.put("model","text-davinci-003");
-            jsonBody.put("prompt", question);
-            jsonBody.put("max_tokens",4000);
-            jsonBody.put("temperature",0);
+    JSONObject jsonObject(Message message){
+        JSONObject jsonObject = new JSONObject();
+        try{
+            if(message.getSentBy().equals(Message.SEND_BY_ME)){
+                jsonObject.put("role", "user");
+            }else{
+                jsonObject.put("role", "assistant");
+            }
+            jsonObject.put("content", message.getMessage());
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
+        return jsonObject;
+    }
 
-        RequestBody requestBody = RequestBody.create(jsonBody.toString(),JSON);
+    List<Message> getLastSevenMessages() {
+        if (messageList.size() <= 7) {
+            return messageList; // 如果列表元素不足7个，直接返回整个列表
+        } else {
+            // 使用subList获取倒数5个元素
+            return messageList.subList(messageList.size() - 7, messageList.size());
+        }
+    }
+
+    RequestBody prepareRequestBody(){
+        try{
+            JSONObject data = new JSONObject();
+            List<Message> list = getLastSevenMessages();
+            JSONArray jsonArray = new JSONArray();
+            for(int i=0;i<list.size();i++){
+                jsonArray.put(i, jsonObject(messageList.get(i)));
+            }
+            data.put("messages", jsonArray);
+            return RequestBody.create(data.toString(),JSON);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void callAPI(String question){
+        RequestBody requestBody = prepareRequestBody();
+        // okhttp
+        messageList.add(new Message("处理中...", Message.SEND_BY_BOT));
         Request request = new Request.Builder()
                 .url(API.API_URL)
-                .header("Authorization","Bearer "+API.API)
                 .post(requestBody)
                 .build();
 
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                addResponse("Failed to load response due to"+e.getMessage());
+                addResponse("Failed to connect due to: "+e.getMessage());
             }
 
             @Override
@@ -151,9 +182,14 @@ public class MainActivity extends AppCompatActivity {
                 if (response.isSuccessful()){
                     JSONObject jsonObject = null;
                     try {
+                        String result = null;
                         jsonObject = new JSONObject(response.body().string());
-                        JSONArray jsonArray = jsonObject.getJSONArray("choices");
-                        String result = jsonArray.getJSONObject(0).getString("text");
+                        boolean success = jsonObject.getBoolean("success");
+                        if(success){
+                            result = jsonObject.getString("value");
+                        }else{
+                            result = jsonObject.getString("cause");
+                        }
                         addResponse(result.trim());
                     } catch (JSONException e) {
                         throw new RuntimeException(e);
